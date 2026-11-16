@@ -72,7 +72,6 @@ def t_statistic(rois: List[float]) -> Optional[float]:
 def bonferroni_threshold(n_rules: int, alpha: float = 0.05) -> float:
     """Soglia |t| approssimata per n_rules test paralleli (approssimazione normale,
     sufficiente per n grandi; per n piccoli è leggermente conservativa)."""
-    import statistics as _s
     p = alpha / max(n_rules, 1)
     # inversa approssimata della normale standard (Acklam-free, buona a 3 decimali)
     # fallback semplice: usa un t critico via scipy se disponibile, altrimenti approssimazione.

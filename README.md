@@ -165,6 +165,54 @@ result = run_tournament(rules, observations, split_ts=1700500000, min_liquidity=
 No API keys or credentials are required anywhere in this codebase — every
 endpoint used is public.
 
+**Network note**: `gamma-api.polymarket.com`, `data-api.polymarket.com`, and
+`clob.polymarket.com` are unreachable from some networks for reasons that
+have nothing to do with this code — e.g. in Italy they're intercepted at the
+ISP level by the ADM gambling-site block (AAMS/"Stop Alle Scommesse
+Illegali"), which serves a certificate for `sito-inibito-giochi.adm.gov.it`
+instead of the real host, so `requests` fails with a TLS hostname-mismatch
+error, not a connection refusal. If you hit that, it's a network-level block
+on the client side, not a dead endpoint — confirmed independently against
+all three hosts and with a public DNS resolver during this review.
+
+## Verified during this review (2026-11-16)
+
+Re-tested end to end against live and synthetic data as part of a
+portfolio-quality pass:
+
+- All three Polymarket hosts above were unreachable from the review
+  environment for the reason noted above, so the statistical modules were
+  instead verified with constructed data shaped exactly like the real v2
+  `/activity` and CLOB `/prices-history` payloads.
+- **Found and fixed a real bug in `kickoff_timestamp()`** (`fetchers.py`):
+  it parsed Polymarket's `gameStartTime` (always UTC) as a naive datetime and
+  called `.timestamp()` on it, which silently interprets naive datetimes in
+  the *host machine's local timezone*. On any machine not set to UTC, the
+  computed kickoff time was off by the local UTC offset (confirmed: 4 hours
+  on a US-Eastern host) — which is exactly the pre-match/in-play contamination
+  bug this project's CLV test claims to guard against (see "filter leak" and
+  "shadow markets" above), just in a place that hadn't been re-checked since
+  the original research night. Fixed by parsing explicitly as UTC.
+- Also fixed a smaller reliability bug in `get_price_history()`: a transient
+  network error (timeout, rate limit) was cached as a permanent empty result
+  for that token/window, silently shrinking any CLV sample computed
+  afterwards with no error ever surfacing. Failures are no longer cached.
+- The Bonferroni / t-stat / train-holdout logic in `backtest.py` was
+  stress-tested with synthetic data: the exact threshold matches
+  `scipy.stats.norm.ppf` to machine precision; a tournament of 1 real
+  (constructed) edge plus 40 pure-noise rules correctly surfaced only the
+  real one; and across 25 trials of *purely random, no-edge* data with 80
+  candidate rules each (2,000 rule-trials total), an uncorrected single
+  `|t| > 1.96` threshold produced a false "discovery" in 24/25 trials (128
+  total), while the full Bonferroni + holdout-reconfirmation pipeline
+  produced **zero** false discoveries. Train/holdout were confirmed strictly
+  time-disjoint with no leakage into the Bonferroni threshold or survivor
+  selection.
+- `wallet_screening.py`'s market-maker filters and CLV math were checked
+  against hand-computed expected values on synthetic wallets (clean wallet,
+  market-maker-signature wallet, sub-$5-median wallet, balanced/all-positive
+  CLV cases) and matched exactly.
+
 ## Status
 
 Closed as of the 2026-11-05 research session with three honest negative

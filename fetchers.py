@@ -11,7 +11,7 @@ Validato nella notte di ricerca del 2026-11-05 (vedi README.md).
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import requests
@@ -100,9 +100,16 @@ def get_price_history(token_id: str, start_ts: Optional[int] = None, end_ts: Opt
         params["interval"] = "max"
     try:
         r = requests.get(CLOB_PRICES_HISTORY, params=params, headers=HEADERS, timeout=20)
+        r.raise_for_status()
         hist = r.json().get("history", [])
     except Exception:
-        hist = []
+        # Do NOT cache a transient failure (timeout, rate limit, bad gateway) as an
+        # empty history: the old code cached `[]` here unconditionally, so one
+        # network hiccup permanently and silently poisoned this token/window for the
+        # rest of the process, quietly shrinking closing_line_value()'s sample
+        # (price_before() returns None -> caller does `continue`) with no error ever
+        # surfaced. A real empty-but-successful response is still cached normally.
+        return []
     _price_history_cache[cache_key] = hist
     return hist
 
@@ -127,6 +134,14 @@ def kickoff_timestamp(event_slug: str) -> Optional[int]:
     for m in ev[0].get("markets", []):
         gst = m.get("gameStartTime")
         if gst:
+            # gameStartTime arrives as e.g. "2026-09-23 08:00:00+00" (UTC, no colon
+            # in the offset). The naive-datetime .timestamp() call this used to make
+            # here interprets the string in the LOCAL system timezone, not UTC — on
+            # any machine not set to UTC, kickoff would silently be off by the local
+            # UTC offset. That's exactly the kind of in-play-contamination bug the
+            # README calls out as already found-and-fixed once; parse as UTC
+            # explicitly so entry_ts < kickoff in closing_line_value() is correct
+            # regardless of the host machine's timezone.
             dt = datetime.strptime(gst.replace("+00", ""), "%Y-%m-%d %H:%M:%S")
-            return int(dt.timestamp())
+            return int(dt.replace(tzinfo=timezone.utc).timestamp())
     return None
